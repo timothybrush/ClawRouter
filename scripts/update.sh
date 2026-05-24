@@ -324,32 +324,173 @@ for stale in "$HOME/.openclaw/extensions/clawrouter.backup."* "$HOME/.openclaw/e
   [ -d "$stale" ] && rm -rf "$stale"
 done
 
+apply_scoped_model_trim() {
+  local rejected_path="$1"
+  if [ -z "$rejected_path" ] || [ ! -f "$rejected_path" ] || [ ! -f "$CONFIG_PATH" ]; then
+    return 1
+  fi
+
+  CONFIG_PATH="$CONFIG_PATH" REJECTED_CONFIG_PATH="$rejected_path" node <<'NODE'
+const fs = require('fs');
+
+const activePath = process.env.CONFIG_PATH;
+const rejectedPath = process.env.REJECTED_CONFIG_PATH;
+
+function fail(message) {
+  console.log(`  Skipped scoped config trim: ${message}`);
+  process.exit(1);
+}
+
+function byteSize(value) {
+  return Buffer.byteLength(JSON.stringify(value ?? null, null, 2));
+}
+
+function objectKeys(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).sort() : [];
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function getBlockrunModels(config) {
+  return config?.models?.providers?.blockrun?.models;
+}
+
+const active = JSON.parse(fs.readFileSync(activePath, 'utf8'));
+const rejected = JSON.parse(fs.readFileSync(rejectedPath, 'utf8'));
+
+const activeTopKeys = objectKeys(active);
+const rejectedTopKeys = objectKeys(rejected);
+if (activeTopKeys.join('\0') !== rejectedTopKeys.join('\0')) {
+  fail('top-level config keys changed');
+}
+
+for (const key of ['auth', 'channels', 'gateway', 'plugins', 'models']) {
+  if (!(key in active) || !(key in rejected)) fail(`missing required ${key} section`);
+}
+
+const activeModels = getBlockrunModels(active);
+const rejectedModels = getBlockrunModels(rejected);
+if (!Array.isArray(activeModels) || !Array.isArray(rejectedModels)) {
+  fail('blockrun model list is missing or invalid');
+}
+
+if (activeModels.length <= rejectedModels.length) {
+  fail(`model count did not shrink (${activeModels.length} -> ${rejectedModels.length})`);
+}
+
+if (rejectedModels.length < 20 || rejectedModels.length > 100) {
+  fail(`unexpected curated model count (${rejectedModels.length})`);
+}
+
+let activeCursor = 0;
+for (const model of rejectedModels) {
+  const id = model?.id;
+  if (typeof id !== 'string' || id.length === 0) fail('rejected model list contains an invalid id');
+  const nextIndex = activeModels.findIndex((candidate, index) => index >= activeCursor && candidate?.id === id);
+  if (nextIndex === -1) fail(`rejected model ${id} is not present in active model list order`);
+  activeCursor = nextIndex + 1;
+}
+
+for (const key of activeTopKeys) {
+  if (key === 'models') continue;
+  const delta = Math.abs(byteSize(active[key]) - byteSize(rejected[key]));
+  if (delta > 2048) fail(`non-model section changed too much: ${key}`);
+}
+
+const activeWithoutModelList = clone(active.models);
+const rejectedWithoutModelList = clone(rejected.models);
+activeWithoutModelList.providers.blockrun.models = [];
+rejectedWithoutModelList.providers.blockrun.models = [];
+const residualModelDelta = Math.abs(byteSize(activeWithoutModelList) - byteSize(rejectedWithoutModelList));
+if (residualModelDelta > 4096) {
+  fail('models section changed beyond the blockrun model list');
+}
+
+const totalDrop = byteSize(active) - byteSize(rejected);
+const modelListDrop = byteSize(activeModels) - byteSize(rejectedModels);
+if (totalDrop <= 0 || modelListDrop / totalDrop < 0.65) {
+  fail('size drop is not primarily from the blockrun model list');
+}
+
+active.models.providers.blockrun.models = rejectedModels;
+const tmpPath = `${activePath}.tmp.${process.pid}`;
+fs.writeFileSync(tmpPath, JSON.stringify(active, null, 2));
+fs.renameSync(tmpPath, activePath);
+
+console.log(
+  `  ✓ Applied scoped BlockRun model-list trim (${activeModels.length} -> ${rejectedModels.length})`,
+);
+NODE
+}
+
+handle_openclaw_install_failure() {
+  local exit_code="$1"
+  if [ "$exit_code" -eq 124 ]; then
+    echo "  (install command timed out — this is normal with OpenClaw v2026.4.5)"
+    if [ -f "$PLUGIN_DIR/package.json" ]; then
+      echo "  Plugin package.json is present; treating install as completed before the hang."
+      return 0
+    fi
+    echo "  Plugin package.json is missing after timeout; continuing with direct npm install."
+    OPENCLAW_INSTALL_RECOVERABLE=1
+    return "$exit_code"
+  fi
+
+  if grep -q "Config write rejected: .*size-drop:" "$OPENCLAW_INSTALL_LOG"; then
+    local rejected_path
+    rejected_path=$(node -e "const fs=require('fs'); const text=fs.readFileSync(process.argv[1],'utf8'); const m=text.match(/Rejected payload saved to ([^\\s]+)\\./); if (m) console.log(m[1]);" "$OPENCLAW_INSTALL_LOG")
+    echo "  ⚠ OpenClaw rejected a config size-drop during plugin registration."
+    if apply_scoped_model_trim "$rejected_path"; then
+      echo "  Continuing with direct npm install after the scoped config update."
+    else
+      echo "  Continuing with direct npm install while preserving your existing config."
+    fi
+    OPENCLAW_INSTALL_RECOVERABLE=1
+    return 0
+  fi
+
+  return "$exit_code"
+}
+
 echo "→ Installing latest ClawRouter..."
 # `--force` is required when the plugin is already installed at the same path
 # (which is always true on update). Without it, OpenClaw exits non-zero with
 # "plugin already exists" and our EXIT trap rolls back, stranding the user on
 # the previous version. `--force` is idempotent for both fresh + upgrade flows.
 #
+# OpenClaw can also reject its own config rewrite when it would shrink a large
+# user config. Treat that as recoverable: keep the user's restored config and
+# install ClawRouter files directly from npm below.
+OPENCLAW_INSTALL_RECOVERABLE=0
+OPENCLAW_INSTALL_LOG="$(mktemp)"
+#
 # Run with timeout — openclaw plugins install may hang after printing
 # "Installed plugin: clawrouter" in OpenClaw v2026.4.5 (parallel plugin loading).
 # 120s is enough for slow connections; the install itself completes in ~30s.
 if command -v timeout >/dev/null 2>&1; then
-  timeout 120 openclaw plugins install --force @blockrun/clawrouter || {
+  timeout 120 openclaw plugins install --force @blockrun/clawrouter 2>&1 | tee "$OPENCLAW_INSTALL_LOG" || {
     exit_code=$?
-    if [ $exit_code -eq 124 ]; then
-      echo "  (install command timed out — this is normal with OpenClaw v2026.4.5)"
-      echo "  Plugin was installed successfully before the hang."
-    else
-      exit $exit_code
-    fi
+    handle_openclaw_install_failure "$exit_code" || {
+      [ "$OPENCLAW_INSTALL_RECOVERABLE" = "1" ] || exit $exit_code
+    }
   }
 else
-  openclaw plugins install --force @blockrun/clawrouter
+  openclaw plugins install --force @blockrun/clawrouter 2>&1 | tee "$OPENCLAW_INSTALL_LOG" || {
+    exit_code=$?
+    handle_openclaw_install_failure "$exit_code" || {
+      [ "$OPENCLAW_INSTALL_RECOVERABLE" = "1" ] || exit $exit_code
+    }
+  }
 fi
+rm -f "$OPENCLAW_INSTALL_LOG"
 
 # Install is complete — clear the rollback trap immediately.
 # From this point on, Ctrl+C or errors should NOT roll back the install.
-trap - EXIT INT TERM
+if [ "$OPENCLAW_INSTALL_RECOVERABLE" != "1" ]; then
+  trap - EXIT INT TERM
+fi
 
 # Restore credentials after plugin install (always restore to preserve user's channels)
 if [ -n "$CREDS_BACKUP" ] && [ -d "$CREDS_BACKUP" ]; then
@@ -422,7 +563,25 @@ force_install_from_npm() {
   return 1
 }
 
-if [ -d "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/package.json" ]; then
+if [ "$OPENCLAW_INSTALL_RECOVERABLE" = "1" ]; then
+  LATEST_VER=$(npm view @blockrun/clawrouter@latest version 2>/dev/null || echo "")
+  if [ -z "$LATEST_VER" ]; then
+    echo "  ✗ Could not resolve latest ClawRouter version from npm"
+    exit 1
+  fi
+  force_install_from_npm "$LATEST_VER"
+  if [ ! -f "$PLUGIN_DIR/package.json" ]; then
+    echo "  ✗ ClawRouter package.json missing after npm fallback"
+    exit 1
+  fi
+  INSTALLED_VER=$(node -e "try{const p=require('$PLUGIN_DIR/package.json');console.log(p.version);}catch{console.log('');}" 2>/dev/null || echo "")
+  if [ -z "$INSTALLED_VER" ]; then
+    echo "  ✗ Could not verify ClawRouter version after npm fallback"
+    exit 1
+  fi
+  echo "  ✓ ClawRouter v${INSTALLED_VER} installed"
+  trap - EXIT INT TERM
+elif [ -d "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/package.json" ]; then
   INSTALLED_VER=$(node -e "try{const p=require('$PLUGIN_DIR/package.json');console.log(p.version);}catch{console.log('');}" 2>/dev/null || echo "")
   LATEST_VER=$(npm view @blockrun/clawrouter@latest version 2>/dev/null || echo "")
   if [ -n "$LATEST_VER" ] && [ -n "$INSTALLED_VER" ] && [ "$INSTALLED_VER" != "$LATEST_VER" ]; then
