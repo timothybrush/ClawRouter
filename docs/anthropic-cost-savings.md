@@ -69,7 +69,7 @@ This is where you're paying for real value:
 
 ### Layer 1: Smart Routing (the biggest win)
 
-ClawRouter scores every prompt against 14 dimensions in <1ms and routes it to the cheapest model that can handle the task.
+ClawRouter scores every prompt against 15 dimensions in <1ms and routes it to the cheapest model that can handle the task.
 
 ```
 "What is the capital of France?"
@@ -188,7 +188,7 @@ Breaking down where the savings come from:
 
 ---
 
-## How the 14-Dimension Router Works
+## How the 15-Dimension Router Works
 
 ClawRouter runs a weighted scoring algorithm on every prompt — entirely locally, in under 1 millisecond, zero external API calls.
 
@@ -311,7 +311,7 @@ $ /stats 7
 
 |                        | ClawRouter                                          | OpenRouter                         |
 | ---------------------- | --------------------------------------------------- | ---------------------------------- |
-| **Smart routing**      | Automatic — 14-dimension scorer picks the model     | Manual — you pick the model        |
+| **Smart routing**      | Automatic — 15-dimension scorer picks the model     | Manual — you pick the model        |
 | **Token optimization** | Built-in compression (7-15% savings)                | None                               |
 | **Response caching**   | Local cache, repeat requests = $0                   | None                               |
 | **Request dedup**      | Retries don't double-bill                           | None                               |

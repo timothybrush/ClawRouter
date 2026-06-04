@@ -173,7 +173,7 @@ When you use `openrouter/auto`, you don't know what model served your request. Y
 
 ClawRouter's routing is 100% local, open-source, and transparent.
 
-**14-dimension weighted classifier** runs locally in <1ms. It scores every request across: token count, code presence, reasoning markers, technical terms, multi-step patterns, question complexity, tool signals, and more.
+**15-dimension weighted classifier** runs locally in <1ms. It scores every request across: token count, code presence, reasoning markers, technical terms, multi-step patterns, question complexity, tool signals, and more.
 
 **Debug headers on every response:**
 

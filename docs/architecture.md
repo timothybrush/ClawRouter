@@ -96,7 +96,7 @@ if (inflight) {
 // Extract user's last message
 const prompt = messages.findLast((m) => m.role === "user")?.content;
 
-// Run 14-dimension weighted scorer
+// Run 15-dimension weighted scorer
 const decision = route(prompt, systemPrompt, maxTokens, {
   config: DEFAULT_ROUTING_CONFIG,
   modelPricing,
