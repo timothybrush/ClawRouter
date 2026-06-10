@@ -23,6 +23,10 @@ export const MODEL_ALIASES: Record<string, string> = {
   "sonnet-4": "anthropic/claude-sonnet-4.6",
   "sonnet-4.6": "anthropic/claude-sonnet-4.6",
   "sonnet-4-6": "anthropic/claude-sonnet-4.6",
+  // Explicit 4.5 pins (distinct model upstream, same pricing as 4.6)
+  "sonnet-4.5": "anthropic/claude-sonnet-4.5",
+  "sonnet-4-5": "anthropic/claude-sonnet-4.5",
+  "anthropic/claude-sonnet-4-5": "anthropic/claude-sonnet-4.5",
   opus: "anthropic/claude-opus-4.8",
   "opus-4": "anthropic/claude-opus-4.8",
   "opus-4.8": "anthropic/claude-opus-4.8",
@@ -322,7 +326,7 @@ export const BLOCKRUN_MODELS: BlockRunModel[] = [
   },
   {
     id: "free",
-    name: "Free → Nemotron Ultra 253B",
+    name: "Free → GPT-OSS 120B",
     inputPrice: 0,
     outputPrice: 0,
     contextWindow: 131_072,
@@ -607,6 +611,19 @@ export const BLOCKRUN_MODELS: BlockRunModel[] = [
     outputPrice: 5.0,
     contextWindow: 200000,
     maxOutput: 8192,
+    vision: true,
+    agentic: true,
+    toolCalling: true,
+  },
+  {
+    id: "anthropic/claude-sonnet-4.5",
+    name: "Claude Sonnet 4.5",
+    version: "4.5",
+    inputPrice: 3.0,
+    outputPrice: 15.0,
+    contextWindow: 200000,
+    maxOutput: 64000,
+    reasoning: true,
     vision: true,
     agentic: true,
     toolCalling: true,
@@ -1229,9 +1246,15 @@ const ALIAS_MODELS: ModelDefinitionConfig[] = Object.entries(MODEL_ALIASES)
 /**
  * All BlockRun models in OpenClaw format (including aliases).
  * Used for proxy-side resolution (alias → target ID), tool routing, etc.
+ *
+ * Catalog entries shadowed by an identically-keyed alias are excluded:
+ * resolveModelAlias checks MODEL_ALIASES first, so those catalog entries are
+ * unreachable and their metadata (name/pricing) would misadvertise what
+ * callers actually get. The alias-derived entry carries the redirect
+ * target's real metadata instead.
  */
 export const OPENCLAW_MODELS: ModelDefinitionConfig[] = [
-  ...BLOCKRUN_MODELS.map(toOpenClawModel),
+  ...BLOCKRUN_MODELS.filter((m) => !(m.id in MODEL_ALIASES)).map(toOpenClawModel),
   ...ALIAS_MODELS,
 ];
 
