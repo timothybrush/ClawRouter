@@ -572,6 +572,42 @@ function safeWrite(res: ServerResponse, data: string | Buffer): boolean {
 const BALANCE_CHECK_BUFFER = 1.5;
 
 /**
+ * Make a string safe for use as an HTTP header value.
+ *
+ * Node rejects header values containing chars outside Latin-1 with
+ * ERR_INVALID_CHAR ("Invalid character in header content"). Routing reasoning
+ * includes matched keywords from the multilingual lists in router/config.ts
+ * (e.g. Cyrillic "функция"), so non-Russian/CJK prompts produce reasoning that
+ * crashes res.writeHead AFTER the upstream call has completed and the x402
+ * payment has settled — the client then retries and pays again.
+ *
+ * Percent-encodes everything outside printable ASCII (stricter than Node's
+ * Latin-1 allowance, so intermediaries can't choke either). Reversible via
+ * decodeURIComponent for debugging.
+ */
+export function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[^\t\x20-\x7E]/gu, (c) => {
+    try {
+      return encodeURIComponent(c);
+    } catch {
+      return "?"; // lone surrogate — not encodable
+    }
+  });
+}
+
+/**
+ * Whether x-clawrouter-* debug headers (profile/tier/model/reasoning) should
+ * be emitted. On by default; kill switch via CLAWROUTER_DEBUG_HEADERS=off|false|0
+ * for clients that can't set the x-clawrouter-debug request header.
+ */
+export function debugHeadersEnabledFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const value = (env.CLAWROUTER_DEBUG_HEADERS ?? "").toLowerCase();
+  return value !== "0" && value !== "false" && value !== "off";
+}
+
+/**
  * Get the proxy port from pre-loaded configuration.
  * Port is validated at module load time, this just returns the cached value.
  */
@@ -3469,8 +3505,9 @@ async function proxyRequest(
   // Track original context size for response headers
   const originalContextSizeKB = Math.ceil(body.length / 1024);
 
-  // Routing debug info is on by default; disable with x-clawrouter-debug: false
-  const debugMode = req.headers["x-clawrouter-debug"] !== "false";
+  // Routing debug info is on by default; disable per-request with
+  // x-clawrouter-debug: false, or globally with CLAWROUTER_DEBUG_HEADERS=off
+  const debugMode = debugHeadersEnabledFromEnv() && req.headers["x-clawrouter-debug"] !== "false";
 
   // --- Smart routing ---
   let routingDecision: RoutingDecision | undefined;
@@ -5823,13 +5860,16 @@ async function proxyRequest(
       responseHeaders["x-context-used-kb"] = String(originalContextSizeKB);
       responseHeaders["x-context-limit-kb"] = String(CONTEXT_LIMIT_KB);
 
-      // Add routing debug headers (opt-in via x-clawrouter-debug: true header)
+      // Add routing debug headers (on by default; see debugMode above).
+      // Reasoning can contain matched multilingual keywords (Cyrillic/CJK) —
+      // must be sanitized or res.writeHead throws ERR_INVALID_CHAR after the
+      // upstream call has already been paid for.
       if (debugMode && routingDecision) {
         responseHeaders["x-clawrouter-profile"] = routingProfile ?? "auto";
         responseHeaders["x-clawrouter-tier"] = routingDecision.tier;
         responseHeaders["x-clawrouter-model"] = actualModelUsed;
         responseHeaders["x-clawrouter-confidence"] = routingDecision.confidence.toFixed(2);
-        responseHeaders["x-clawrouter-reasoning"] = routingDecision.reasoning;
+        responseHeaders["x-clawrouter-reasoning"] = sanitizeHeaderValue(routingDecision.reasoning);
         if (routingDecision.agenticScore !== undefined) {
           responseHeaders["x-clawrouter-agentic-score"] = routingDecision.agenticScore.toFixed(2);
         }
@@ -5984,7 +6024,21 @@ async function proxyRequest(
 
       // Update content-length header since body may have changed
       responseHeaders["content-length"] = String(responseBody.length);
-      res.writeHead(upstream.status, responseHeaders);
+      try {
+        res.writeHead(upstream.status, responseHeaders);
+      } catch (headerError) {
+        // Defense in depth: a single invalid header value must never destroy a
+        // response the user has already paid for (the failed delivery makes
+        // clients retry — and re-pay — in a loop). Sanitize every value and
+        // deliver the body; the debug headers are best-effort metadata.
+        console.error(
+          `[ClawRouter] Invalid response header, sanitizing all values: ${String(headerError)}`,
+        );
+        for (const [key, value] of Object.entries(responseHeaders)) {
+          responseHeaders[key] = sanitizeHeaderValue(value);
+        }
+        res.writeHead(upstream.status, responseHeaders);
+      }
       safeWrite(res, responseBody);
       responseChunks.push(responseBody);
       res.end();
