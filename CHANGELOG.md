@@ -4,6 +4,14 @@ All notable changes to ClawRouter.
 
 ---
 
+## v0.12.207 — June 11, 2026
+
+Honor standard proxy environment variables for upstream traffic.
+
+- **`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` fallback** (`src/upstream-proxy.ts`). Node's fetch (undici) ignores the standard proxy env vars, so users whose system traffic is meant to flow through a local proxy (mihomo/clash without TUN mode, corporate proxies) had ClawRouter connecting *directly* while their `curl` tests went through the proxy — on throttled routes (e.g. RU → Google-hosted gateway) this surfaced as instant 500s on large request bodies, `Premature close`, and per-model timeouts, while small requests slipped through. When `BLOCKRUN_UPSTREAM_PROXY` is unset, ClawRouter now applies the standard env vars via undici's `EnvHttpProxyAgent`. `NO_PROXY` is honored, and loopback hosts (`localhost`, `127.0.0.1`, `::1`) are always excluded so local health checks and sibling proxies stay direct. `BLOCKRUN_UPSTREAM_PROXY` still wins when set; SOCKS URLs in the standard env vars are *not* auto-applied (a warning points to `BLOCKRUN_UPSTREAM_PROXY=socks5://…`). (Test: `test/upstream-proxy.test.ts`, 9 cases, dependency-injected — no process-global mutation in tests.)
+
+---
+
 ## v0.12.206 — June 10, 2026
 
 End-to-end audit sweep: 4 proxy reliability fixes (each TDD'd with a new regression test), abort/teardown hardening, registry realignment with the gateway, and doc/count sync. 596 tests passing (8 new).

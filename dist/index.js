@@ -78016,9 +78016,17 @@ ${lines.join("\n")}`;
 };
 
 // src/upstream-proxy.ts
-async function applyUpstreamProxy(proxyUrl) {
-  const url = proxyUrl ?? process.env.BLOCKRUN_UPSTREAM_PROXY;
-  if (!url) return void 0;
+function firstEnv(env, ...names) {
+  for (const name of names) {
+    const value = env[name];
+    if (value) return value;
+  }
+  return void 0;
+}
+async function applyUpstreamProxy(proxyUrl, overrides) {
+  const env = overrides?.env ?? process.env;
+  const url = proxyUrl ?? env.BLOCKRUN_UPSTREAM_PROXY;
+  if (!url) return applyEnvProxyFallback(env, overrides);
   let parsed;
   try {
     parsed = new URL(url);
@@ -78030,10 +78038,12 @@ async function applyUpstreamProxy(proxyUrl) {
   try {
     if (scheme === "socks5:" || scheme === "socks4:") {
       const { Socks5ProxyAgent, setGlobalDispatcher } = await Promise.resolve().then(() => __toESM(require_undici(), 1));
-      setGlobalDispatcher(new Socks5ProxyAgent(url));
+      const setDispatcher = overrides?.setDispatcher ?? setGlobalDispatcher;
+      setDispatcher(new Socks5ProxyAgent(url));
     } else if (scheme === "http:" || scheme === "https:") {
       const { ProxyAgent, setGlobalDispatcher } = await Promise.resolve().then(() => __toESM(require_undici(), 1));
-      setGlobalDispatcher(new ProxyAgent(url));
+      const setDispatcher = overrides?.setDispatcher ?? setGlobalDispatcher;
+      setDispatcher(new ProxyAgent(url));
     } else {
       console.warn(
         `[ClawRouter] Unsupported proxy scheme "${scheme}" in BLOCKRUN_UPSTREAM_PROXY \u2014 use http:// or socks5://`
@@ -78043,6 +78053,43 @@ async function applyUpstreamProxy(proxyUrl) {
   } catch (err) {
     console.warn(
       `[ClawRouter] Failed to configure upstream proxy "${url}": ${err instanceof Error ? err.message : err}`
+    );
+    return void 0;
+  }
+  return url;
+}
+async function applyEnvProxyFallback(env, overrides) {
+  const url = firstEnv(env, "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy");
+  if (!url) return void 0;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    console.warn(`[ClawRouter] Invalid proxy URL in environment: ${url} \u2014 skipping proxy setup`);
+    return void 0;
+  }
+  if (parsed.protocol === "socks5:" || parsed.protocol === "socks4:") {
+    console.warn(
+      `[ClawRouter] SOCKS proxy found in environment but only applied when explicit \u2014 set BLOCKRUN_UPSTREAM_PROXY=${url} to route upstream traffic through it`
+    );
+    return void 0;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    console.warn(
+      `[ClawRouter] Unsupported proxy scheme "${parsed.protocol}" in environment \u2014 use http:// or set BLOCKRUN_UPSTREAM_PROXY`
+    );
+    return void 0;
+  }
+  try {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = await Promise.resolve().then(() => __toESM(require_undici(), 1));
+    const setDispatcher = overrides?.setDispatcher ?? setGlobalDispatcher;
+    const httpProxy = firstEnv(env, "HTTP_PROXY", "http_proxy") ?? url;
+    const httpsProxy = firstEnv(env, "HTTPS_PROXY", "https_proxy") ?? url;
+    const noProxy = [firstEnv(env, "NO_PROXY", "no_proxy"), "localhost", "127.0.0.1", "::1"].filter(Boolean).join(",");
+    setDispatcher(new EnvHttpProxyAgent({ httpProxy, httpsProxy, noProxy }));
+  } catch (err) {
+    console.warn(
+      `[ClawRouter] Failed to configure env proxy "${url}": ${err instanceof Error ? err.message : err}`
     );
     return void 0;
   }
