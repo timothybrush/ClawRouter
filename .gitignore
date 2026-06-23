@@ -7,3 +7,4 @@ dist-e2e/
 .playwright-mcp/
 .worktrees/
 .gstack/
+.pytest_cache/

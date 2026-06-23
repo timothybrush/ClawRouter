@@ -4,6 +4,22 @@ All notable changes to ClawRouter.
 
 ---
 
+## v0.12.212 — June 22, 2026
+
+Stop advertising delisted/redirect aliases in `/v1/models` ([#187](https://github.com/BlockRunAI/ClawRouter/pull/187), thanks [@KillerQueen-Z](https://github.com/KillerQueen-Z)).
+
+### Model list no longer surfaces full-slug redirect aliases
+
+- **`MODEL_ALIASES` mixes two kinds of keys** — friendly short names (`free`, `opus`, `gpt-120b`) and full `provider/model` redirects for backward-compat + delisted models (e.g. `free/deepseek-v4-pro` → `free/deepseek-v4-flash` after V4 Pro's NVIDIA host hung 2026-04-30). `ALIAS_MODELS` turned **every** alias into a listable model, so dead slugs leaked into `/v1/models` (and any downstream picker) as if they were real, available models — a Codex picker built from `/v1/models` showed "DeepSeek V4 Pro (free)" that silently routes to v4-flash.
+- **Fix: only surface friendly short aliases (no `/`).** Full-slug redirect aliases are skipped from the advertised list — their target is a real model that's already listed, so nothing the user wants disappears. They remain **fully callable** via `resolveModelAlias()` (which reads `MODEL_ALIASES` directly), so pinned callers don't break. One-line filter in `ALIAS_MODELS`; `MODEL_ALIASES` and resolution logic are untouched.
+- **Scope confirmed:** the OpenClaw picker (`VISIBLE_OPENCLAW_MODELS` / `top-models.json`) and the `openclaw.json` allowlist sync are unaffected — every picker entry is a real catalog id, never an alias key. Three delisted-redirect aliases that are _also_ real catalog ids (`openai/o1-mini`, `nvidia/kimi-k2.5`, `google/gemini-3-pro-preview`) drop off the HTTP discovery surface as well — intended: all three are dead redirects whose live successors stay listed, and all stay callable.
+
+### Maintenance
+
+- Formatted `test/test-e2e.ts` (a pre-existing `prettier --check` failure that was red-lining the **Lint & Typecheck** required check on every PR) and added `.pytest_cache/` to `.gitignore`.
+
+---
+
 ## v0.12.211 — June 18, 2026
 
 Add Z.AI's new flagship **GLM-5.2** (launched 2026-06-16), aligning with BlockRun's source-of-truth catalog (`zai/glm-5.2`, first in the GLM lineup).

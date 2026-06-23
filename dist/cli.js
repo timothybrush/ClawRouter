@@ -33391,7 +33391,7 @@ var init_models = __esm({
         toolCalling: true
       }
     ];
-    ALIAS_MODELS = Object.entries(MODEL_ALIASES).map(([alias, targetId]) => {
+    ALIAS_MODELS = Object.entries(MODEL_ALIASES).filter(([alias]) => !alias.includes("/")).map(([alias, targetId]) => {
       const target = BLOCKRUN_MODELS.find((m) => m.id === targetId);
       if (!target) return null;
       return toOpenClawModel({ ...target, id: alias, name: `${alias} \u2192 ${target.name}` });

@@ -507,7 +507,8 @@ async function runLocalSuite(startProxy: StartProxy): Promise<boolean> {
           stream: false,
         });
         const content = await expectChatContent(res);
-        if (!/paris/i.test(content)) throw new Error(`Expected Paris-related answer, got: ${content}`);
+        if (!/paris/i.test(content))
+          throw new Error(`Expected Paris-related answer, got: ${content}`);
         return `(response="${content.trim()}")`;
       })) && allPassed;
 
@@ -611,7 +612,9 @@ async function runLocalSuite(startProxy: StartProxy): Promise<boolean> {
         });
         const payload = await readResponseBody(res);
         if (res.status < 400) {
-          throw new Error(`Expected error status, got ${res.status}: ${payload.text.slice(0, 300)}`);
+          throw new Error(
+            `Expected error status, got ${res.status}: ${payload.text.slice(0, 300)}`,
+          );
         }
         const errorMsg = extractErrorMessage(payload).toLowerCase();
         if (!errorMsg.includes("message") && !errorMsg.includes("invalid request")) {
@@ -834,7 +837,8 @@ async function runLiveSuite(startProxy: StartProxy): Promise<boolean> {
         console.log(
           `  [routed] ${d.model} (${d.tier}, ${d.method}, confidence=${d.confidence.toFixed(2)}, cost=$${d.costEstimate.toFixed(4)}, saved=${(d.savings * 100).toFixed(0)}%)`,
         ),
-      onPayment: (info) => console.log(`  [payment] ${info.model} ${info.amount} on ${info.network}`),
+      onPayment: (info) =>
+        console.log(`  [payment] ${info.model} ${info.amount} on ${info.network}`),
     });
 
     allPassed =
