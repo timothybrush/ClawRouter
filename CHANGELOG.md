@@ -4,6 +4,26 @@ All notable changes to ClawRouter.
 
 ---
 
+## v0.12.216 — June 30, 2026
+
+Security + dependency hygiene: clear all 22 Dependabot alerts (**`npm audit` → 0 vulnerabilities**) and fix a latent missing-dependency bug in the upstream-proxy feature.
+
+### `undici` is now a declared dependency (fixes the upstream-proxy feature for clean installs)
+
+- **Latent bug:** `src/upstream-proxy.ts` lazy-imports `undici` (`await import("undici")`) to honor `BLOCKRUN_UPSTREAM_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, but `undici` was **never declared** in `dependencies` — it only resolved because `openclaw` (a dev/peer dependency) hoisted `undici` to the install root. `npm ls undici --omit=dev` confirmed no shipped runtime dep provides it, so a clean `npm install -g @blockrun/clawrouter` could leave the proxy feature unable to load undici (caught + warned, then connecting directly). **Fix:** declare `undici@^8.5.0` (the patched version) as a direct dependency — the proxy feature now works regardless of hoisting, and the undici advisories are resolved at the source.
+
+### Dependency updates
+
+- **openclaw** dev/peer dependency bumped `2026.5.7 → 2026.6.10` (in range), clearing all `openclaw` and transitive `@mariozechner/pi-*`, `markdown-it`, `tar`, `undici` advisories.
+- **esbuild** pinned to `^0.28.1` via `overrides` (joining the existing `basic-ftp` / `ws` / `postcss` pins), clearing GHSA-g7r4-m6w7-qqqr (dev-server arbitrary file read, Windows-only — not reachable here, but pinned for cleanliness).
+- All alerts were dev-time/lockfile-only — the **published runtime footprint had no vulnerable deps**; this commit makes the lockfile and dependency declarations honest.
+
+### Test fix
+
+- `test/integration/security-scanner.test.ts` located openclaw's scanner chunk by the `skill-scanner-*.js` name; openclaw 2026.6.10 renamed it to `scanner-*.js`. Broadened the filter to match both prefixes (the loader already disambiguates by the `scanDirectoryWithSummary` export). Full suite **645 passed**, lint + typecheck + build clean.
+
+---
+
 ## v0.12.215 — June 30, 2026
 
 Recover tool calls that GPT 5.4 emits as plain JSON / function-call-looking text instead of structured `tool_calls` ([#193](https://github.com/BlockRunAI/ClawRouter/issues/193), thanks [@0xCheetah1](https://github.com/0xCheetah1)).
